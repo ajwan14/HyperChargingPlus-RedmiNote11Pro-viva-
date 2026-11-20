@@ -1,0 +1,19 @@
+# Build artifacts
+*.zip
+*.tar.gz
+apk_build/
+scratch_apk/
+
+# Logs
+*.log
+hyper_charge.log
+
+# Temporary & system files
+*.tmp
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp

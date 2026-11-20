@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Hyper Charging+</string>
+    <string name="channel_name">Hyper Charging+ status notifications</string>
+    <string name="channel_desc">Real-time battery and fast charging status notifications</string>
+</resources>

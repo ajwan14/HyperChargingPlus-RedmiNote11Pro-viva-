@@ -1,0 +1,108 @@
+name: Build & Release Magisk Module
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish as GitHub Release'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Package Module
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Companion APK
+        run: |
+          chmod +x app/build.sh || true
+          if [ -f app/build.sh ]; then
+            echo "Building APK from source..."
+            ./app/build.sh || echo "Warning: APK build failed, falling back to prebuilt APK"
+          fi
+          ls -lh system/app/HyperChargingService/HyperChargeService.apk
+
+      - name: Extract Version & Set Names
+        id: meta
+        run: |
+          MOD_VER=$(grep -E '^version=' module.prop | cut -d= -f2 | tr -d ' \r\n')
+          if [ -z "$MOD_VER" ]; then MOD_VER="2.1-viva"; fi
+
+          if [ -n "$GITHUB_REF_NAME" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            RELEASE_TAG="$GITHUB_REF_NAME"
+          else
+            RELEASE_TAG="v${MOD_VER}"
+          fi
+
+          ZIP_NAME="HYPER_CHARGING_PLUS_${MOD_VER}_67W.zip"
+
+          echo "version=$MOD_VER" >> $GITHUB_OUTPUT
+          echo "tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
+
+      - name: Package Magisk Module Zip
+        run: |
+          ZIP_NAME="${{ steps.meta.outputs.zip_name }}"
+          rm -f "$ZIP_NAME"
+
+          zip -r9 "$ZIP_NAME" \
+            META-INF \
+            system \
+            customize.sh \
+            service.sh \
+            module.prop \
+            system.prop \
+            uninstall.sh \
+            game_list.sh \
+            banner.png \
+            changelog.md \
+            README.md \
+            LICENSE
+
+          sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
+          echo "Module zip created: $ZIP_NAME"
+          ls -lh "$ZIP_NAME"
+          cat "${ZIP_NAME}.sha256"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.zip_name }}
+          path: |
+            ${{ steps.meta.outputs.zip_name }}
+            ${{ steps.meta.outputs.zip_name }}.sha256
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "Hyper Charging+ ${{ steps.meta.outputs.version }} [Redmi Note 11 Pro 4G viva]"
+          files: |
+            ${{ steps.meta.outputs.zip_name }}
+            ${{ steps.meta.outputs.zip_name }}.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true

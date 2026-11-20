@@ -1,53 +1,55 @@
 #!/system/bin/sh
+# Uninstaller for Hyper Charging+ (viva Edition)
+
+# Stop and kill companion app/services
+am stopservice --user 0 -n com.hypercharge.service/.ChargeNotificationService 2>/dev/null
+am stopservice --user 0 -n com.hypercharge.service/.NotificationService 2>/dev/null
 am force-stop com.hypercharge.service 2>/dev/null
 am kill com.hypercharge.service 2>/dev/null
 
-for PID in $(ps -A 2>/dev/null | grep "com.hypercharge" | awk '{print $1}'); do
-  kill -9 "$PID" 2>/dev/null
+pkill -9 -f "com.hypercharge" 2>/dev/null
+pkill -9 -f "service.sh" 2>/dev/null
+
+# Reset battery state in Android system server
+dumpsys battery reset 2>/dev/null
+
+# Restore kernel charging nodes to factory defaults
+for NODE in \
+  /sys/class/power_supply/battery/input_suspend \
+  /sys/class/power_supply/usb/input_suspend \
+  /sys/class/power_supply/ac/input_suspend \
+  /sys/class/power_supply/main/input_suspend \
+  /sys/class/power_supply/battery/parallel_disable
+do
+  [ -e "$NODE" ] && echo 0 > "$NODE" 2>/dev/null
 done
 
-pm clear com.hypercharge.service 2>/dev/null
+echo 1 > /sys/class/power_supply/battery/charging_enabled 2>/dev/null
+echo 1 > /sys/class/power_supply/battery/battery_charging_enabled 2>/dev/null
+echo 0 > /sys/class/power_supply/battery/input_current_limited 2>/dev/null
+echo 1 > /sys/class/power_supply/battery/step_charging_enabled 2>/dev/null
 
+# MediaTek command restore
+if [ -f /proc/mtk_battery_cmd/current_cmd ]; then
+  echo 0 0 > /proc/mtk_battery_cmd/current_cmd 2>/dev/null
+fi
+
+# Clean companion APK and settings if installed
 dumpsys deviceidle whitelist -com.hypercharge.service 2>/dev/null
-
 pm revoke com.hypercharge.service android.permission.POST_NOTIFICATIONS 2>/dev/null
 pm revoke com.hypercharge.service android.permission.FOREGROUND_SERVICE 2>/dev/null
 pm revoke com.hypercharge.service android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 2>/dev/null
-
-cmd appops set com.hypercharge.service POST_NOTIFICATIONS default 2>/dev/null
-cmd appops set com.hypercharge.service RUN_IN_BACKGROUND default 2>/dev/null
-cmd appops set com.hypercharge.service RUN_ANY_IN_BACKGROUND default 2>/dev/null
-
+cmd notification delete_channel com.hypercharge.service 2>/dev/null
 pm uninstall --user 0 com.hypercharge.service 2>/dev/null
 pm uninstall com.hypercharge.service 2>/dev/null
-pm uninstall -k --user 0 com.hypercharge.service 2>/dev/null
 
-rm -rf /data/app/com.hypercharge.service* 2>/dev/null
-rm -rf /data/app/*/com.hypercharge.service* 2>/dev/null
+rm -rf /data/app/*com.hypercharge.service* 2>/dev/null
 rm -rf /data/data/com.hypercharge.service 2>/dev/null
-rm -rf /data/user/0/com.hypercharge.service 2>/dev/null
 rm -rf /data/user_de/0/com.hypercharge.service 2>/dev/null
 
-cmd notification delete_channel com.hypercharge.service 2>/dev/null
-
-for PID in $(ps -A 2>/dev/null | grep "service.sh" | awk '{print $1}'); do
-  kill -9 "$PID" 2>/dev/null
-done
-
-sleep 3
-
+# Clean logs & temporary scripts
 rm -f /sdcard/hyper_charge.log 2>/dev/null
-rm -f /sdcard/hyper_charge.log 2>/dev/null
-sync
-rm -f /sdcard/hyper_charge.log 2>/dev/null
-rm -f /sdcard/Android/data/com.hypercharge.service 2>/dev/null
+rm -f /data/local/tmp/hc_cleanup.sh 2>/dev/null
+rm -rf /data/adb/hypercharge 2>/dev/null
 
-cmd package reconcile 2>/dev/null
-pm reconcile-secondary-dex-files com.hypercharge.service 2>/dev/null
-
-echo '#!/system/bin/sh
-until [ -d /sdcard/Android ]; do sleep 1; done
-rm -f /sdcard/hyper_charge.log 2>/dev/null
-rm -f /data/local/tmp/hc_cleanup.sh 2>/dev/null' > /data/local/tmp/hc_cleanup.sh
-chmod +x /data/local/tmp/hc_cleanup.sh
-nohup sh /data/local/tmp/hc_cleanup.sh >/dev/null 2>&1 &
+exit 0

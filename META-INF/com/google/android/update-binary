@@ -1,0 +1,12 @@
+#!/bin/sh
+# Magisk, KernelSU, and APatch universal module installer
+UMASK=022
+if [ -f /data/adb/magisk/util_functions.sh ]; then
+  . /data/adb/magisk/util_functions.sh
+elif [ -f /data/adb/ksu/bin/util_functions.sh ]; then
+  . /data/adb/ksu/bin/util_functions.sh
+elif [ -f /data/adb/ap/bin/util_functions.sh ]; then
+  . /data/adb/ap/bin/util_functions.sh
+fi
+install_module
+exit 0
