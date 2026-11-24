@@ -3,18 +3,16 @@ package com.hypercharge.service;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.os.Build;
-import android.os.Handler;
 import android.os.IBinder;
-import android.os.Looper;
 
 public class ChargeNotificationService extends Service {
     private static final String CHANNEL_ID = "hypercharge_channel";
     private static final int NOTIFICATION_ID = 1;
     private NotificationManager notificationManager;
-    private final Handler handler = new Handler(Looper.getMainLooper());
 
     @Override
     public void onCreate() {
@@ -31,15 +29,16 @@ public class ChargeNotificationService extends Service {
         }
 
         String mode = intent.getStringExtra("mode");
-        if (mode == null) mode = "INACTIVE";
+        if (mode == null || mode.trim().isEmpty()) {
+            mode = "NORMAL";
+        }
 
-        // CRITICAL FIX: If disconnected or inactive, immediately stop foreground & terminate service!
+        // When disconnected or inactive, immediately drop notification and terminate service
         if ("INACTIVE".equalsIgnoreCase(mode) || "STOP".equalsIgnoreCase(mode) || "DISCONNECTED".equalsIgnoreCase(mode)) {
             stopForegroundService();
             return START_NOT_STICKY;
         }
 
-        final String finalMode = mode;
         final int temp = intent.getIntExtra("temp", 0);
         final int battery = intent.getIntExtra("battery", 0);
         final int current = intent.getIntExtra("current", 0);
@@ -47,47 +46,43 @@ public class ChargeNotificationService extends Service {
         final int remaining = intent.getIntExtra("remaining", 0);
         final int timeLeft = intent.getIntExtra("timeleft", 0);
 
-        handler.post(() -> {
-            try {
-                Notification notification = buildNotification(finalMode, temp, battery, current, appName, remaining, timeLeft);
-                startForeground(NOTIFICATION_ID, notification);
-            } catch (Exception ignored) {}
-        });
+        try {
+            createNotificationChannel();
+            Notification notification = buildNotification(mode, temp, battery, current, appName, remaining, timeLeft);
+            startForeground(NOTIFICATION_ID, notification);
+        } catch (Exception ignored) {}
 
         return START_NOT_STICKY;
     }
 
     private void stopForegroundService() {
-        handler.post(() -> {
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    stopForeground(STOP_FOREGROUND_REMOVE);
-                } else {
-                    stopForeground(true);
-                }
-                if (notificationManager != null) {
-                    notificationManager.cancel(NOTIFICATION_ID);
-                }
-            } catch (Exception ignored) {}
-            stopSelf();
-        });
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+            } else {
+                stopForeground(true);
+            }
+            if (notificationManager != null) {
+                notificationManager.cancel(NOTIFICATION_ID);
+            }
+        } catch (Exception ignored) {}
+        stopSelf();
     }
 
     private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && notificationManager != null) {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
-                "Hyper Charging+ status notifications",
-                NotificationManager.IMPORTANCE_LOW
+                "Hyper Charging+ Status",
+                NotificationManager.IMPORTANCE_DEFAULT
             );
             channel.setDescription("Real-time battery and fast charging status notifications");
-            channel.setShowBadge(false);
+            channel.setShowBadge(true);
             channel.enableVibration(false);
             channel.enableLights(false);
             channel.setSound(null, null);
-            if (notificationManager != null) {
-                notificationManager.createNotificationChannel(channel);
-            }
+            channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+            notificationManager.createNotificationChannel(channel);
         }
     }
 
@@ -95,7 +90,6 @@ public class ChargeNotificationService extends Service {
         String title;
         String subTitle;
         String contentText;
-        int icon;
 
         boolean isGame = "GAME".equalsIgnoreCase(mode);
         boolean isFull = "FULL".equalsIgnoreCase(mode);
@@ -107,29 +101,24 @@ public class ChargeNotificationService extends Service {
             subTitle = "Hyper Charging+🎮";
             String timeStr = formatTime(remaining);
             contentText = battery + "%  •  " + temp + "°C" + (!timeStr.isEmpty() ? "  •  ⏱️ " + timeStr : "");
-            icon = R.drawable.ic_game;
         } else if (isFull) {
             title = "Battery Full — Charging Stopped";
             subTitle = "Hyper Charging+⚡";
             contentText = battery + "%  •  " + temp + "°C  •  🔋 Full";
-            icon = R.drawable.ic_notification;
         } else if (isSwitchGame) {
             title = "Activating Bypass Charging⚡";
             subTitle = "Hyper Charging+⚡";
             contentText = battery + "%  •  " + temp + "°C";
-            icon = R.drawable.ic_game;
         } else if (isSwitchNormal) {
             title = "Activating Fast Charging";
             subTitle = "Hyper Charging+⚡";
             contentText = battery + "%  •  " + temp + "°C";
-            icon = R.drawable.ic_notification;
         } else {
             // NORMAL Fast Charging
             title = "Fast Charging Active";
             subTitle = "Hyper Charging+⚡";
             String timeStr = formatTime(remaining);
             contentText = battery + "%  •  " + temp + "°C  •  ⚡ " + current + "mA" + (!timeStr.isEmpty() ? "  •  ⏱️ " + timeStr : "");
-            icon = R.drawable.ic_notification;
         }
 
         Notification.Builder builder;
@@ -139,15 +128,26 @@ public class ChargeNotificationService extends Service {
             builder = new Notification.Builder(this);
         }
 
-        builder.setSmallIcon(icon)
+        builder.setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(contentText)
             .setSubText(subTitle)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
+            .setPriority(Notification.PRIORITY_HIGH)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
-            .setCategory(Notification.CATEGORY_SERVICE);
+            .setCategory(Notification.CATEGORY_STATUS);
+
+        try {
+            Intent clickIntent = new Intent(Intent.ACTION_POWER_USAGE_SUMMARY);
+            clickIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            PendingIntent pi = PendingIntent.getActivity(
+                this, 0, clickIntent,
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0
+            );
+            builder.setContentIntent(pi);
+        } catch (Exception ignored) {}
 
         return builder.build();
     }

@@ -20,6 +20,16 @@ done
 # Initialize log
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Hyper Charging+ viva initialized" > "$LOG_FILE"
 
+# Guarantee companion APK permissions (handles recovery/TWRP flash)
+sleep 2
+if ! pm path com.hypercharge.service >/dev/null 2>&1; then
+  pm install -r -g "$MODDIR/system/app/HyperChargingService/HyperChargeService.apk" 2>/dev/null
+fi
+pm grant com.hypercharge.service android.permission.POST_NOTIFICATIONS 2>/dev/null
+pm grant com.hypercharge.service android.permission.FOREGROUND_SERVICE 2>/dev/null
+appops set com.hypercharge.service POST_NOTIFICATION allow 2>/dev/null
+dumpsys deviceidle whitelist +com.hypercharge.service 2>/dev/null
+
 # ------------------------------------------------------------------------------
 # User Configuration
 # ------------------------------------------------------------------------------
@@ -54,20 +64,20 @@ load_config
 BATTERY_CAPACITY_MAH=5000
 
 # ------------------------------------------------------------------------------
-# 67W Xiaomi Turbo Current Profiles (uA)
+# 67W Xiaomi Turbo Current Profiles (uA) - High Output Viva Tuning
 # ------------------------------------------------------------------------------
-TURBO_CURRENT=6200000     # 6.2A Max Turbo (< 38.0°C)
-HIGH_CURRENT=5200000      # 5.2A High Speed (38.0°C - 40.5°C)
-BALANCED_CURRENT=4200000  # 4.2A Balanced (40.5°C - 42.5°C)
-WARM_CURRENT=3200000      # 3.2A Warm (42.5°C - 44.5°C)
-COOLING_CURRENT=2000000   # 2.0A Cooling (44.5°C - 46.5°C)
-THROTTLE_CURRENT=1200000  # 1.2A Safety Cap (46.5°C - 47.9°C)
-TRICKLE_CURRENT=1000000   # 1.0A Trickle (>= 99%)
+TURBO_CURRENT=6500000     # 6.5A Full 67W Turbo (< 41.0°C)
+HIGH_CURRENT=5800000      # 5.8A High Speed (41.0°C - 43.0°C)
+BALANCED_CURRENT=4800000  # 4.8A Balanced (43.0°C - 44.5°C)
+WARM_CURRENT=3800000      # 3.8A Warm (44.5°C - 46.0°C)
+COOLING_CURRENT=2600000   # 2.6A Cooling (46.0°C - 47.5°C)
+THROTTLE_CURRENT=1500000  # 1.5A Safety Cap (47.5°C - 48.4°C)
+TRICKLE_CURRENT=1200000   # 1.2A Trickle (>= 99%)
 
 # Taper limits based on battery percentage
-CAP_85_CURRENT=4200000
-CAP_90_CURRENT=3200000
-CAP_95_CURRENT=2000000
+CAP_85_CURRENT=5200000
+CAP_90_CURRENT=4200000
+CAP_95_CURRENT=2800000
 
 # ------------------------------------------------------------------------------
 # State Variables
@@ -118,8 +128,10 @@ read_node_fb() {
 # ------------------------------------------------------------------------------
 enable_mtk_fastcharge() {
   write_node /sys/class/power_supply/battery/fast_charge 1
+  write_node /sys/class/power_supply/battery/device/fast_charge 1
   write_node /sys/class/power_supply/battery/charging_enabled 1
   write_node /sys/class/power_supply/battery/battery_charging_enabled 1
+  write_node /sys/devices/platform/charger/charging_enabled 1
   write_node /sys/class/power_supply/battery/input_current_limited 0
   write_node /sys/class/power_supply/battery/step_charging_enabled 0
   write_node /sys/class/power_supply/battery/thermal_charge_level 0
@@ -146,6 +158,9 @@ apply_current() {
   write_node /sys/class/power_supply/main/constant_charge_current_max "$_TARGET"
   write_node /sys/class/power_supply/usb/current_max "$_TARGET"
   write_node /sys/class/power_supply/ac/current_max "$_TARGET"
+  write_node /sys/devices/platform/charger/fast_charge_current "$_TARGET"
+  write_node /sys/devices/platform/charger/input_current_limit "$_TARGET"
+  write_node /sys/devices/platform/charger/constant_charge_current "$_TARGET"
 }
 
 stop_charging() {
@@ -172,7 +187,7 @@ start_charging() {
 }
 
 # ------------------------------------------------------------------------------
-# Notification Lifecycle (Clean: Only Active When Plugged In)
+# Notification Lifecycle (Direct Root Execution)
 # ------------------------------------------------------------------------------
 check_companion_apk() {
   if pm path com.hypercharge.service >/dev/null 2>&1; then
@@ -184,19 +199,22 @@ check_companion_apk() {
 check_companion_apk
 
 start_notification_service() {
-  if [ "$HAS_APK" = "1" ]; then
-    am start-foreground-service --user 0 -n com.hypercharge.service/.ChargeNotificationService >/dev/null 2>&1 || \
-    am start-foreground-service --user 0 -n com.hypercharge.service/.NotificationService >/dev/null 2>&1
-    NOTIF_ACTIVE=1
-  fi
+  am start-foreground-service --user 0 \
+    -n com.hypercharge.service/.ChargeNotificationService \
+    --es mode "NORMAL" \
+    --ei temp "${TEMP_C:-30}" \
+    --ei battery "${CAP:-50}" \
+    --ei current "${CUR_MA:-0}" >/dev/null 2>&1
+  NOTIF_ACTIVE=1
 }
 
 stop_notification_service() {
-  if [ "$NOTIF_ACTIVE" = "1" ] || [ "$HAS_APK" = "1" ]; then
-    am stopservice --user 0 -n com.hypercharge.service/.ChargeNotificationService >/dev/null 2>&1
-    am stopservice --user 0 -n com.hypercharge.service/.NotificationService >/dev/null 2>&1
-    NOTIF_ACTIVE=0
-  fi
+  am start-foreground-service --user 0 \
+    -n com.hypercharge.service/.ChargeNotificationService \
+    --es mode "DISCONNECTED" >/dev/null 2>&1
+  am stopservice --user 0 -n com.hypercharge.service/.ChargeNotificationService >/dev/null 2>&1
+  am stopservice --user 0 -n com.hypercharge.service/.NotificationService >/dev/null 2>&1
+  NOTIF_ACTIVE=0
 }
 
 send_notification_update() {
@@ -208,14 +226,17 @@ send_notification_update() {
   _REMAINING="${6:-0}"
   _TIME_LEFT="${7:-0}"
 
-  [ "$NOTIF_ACTIVE" = "0" ] && return
+  am start-foreground-service --user 0 \
+    -n com.hypercharge.service/.ChargeNotificationService \
+    --es mode "$_MODE" \
+    --ei temp "$_TEMP_C" \
+    --ei battery "$_BAT" \
+    --ei current "${_CUR_MA:-0}" \
+    --es appname "${_APP_NAME:-}" \
+    --ei remaining "${_REMAINING:-0}" \
+    --ei timeleft "${_TIME_LEFT:-0}" >/dev/null 2>&1
 
-  am broadcast --user 0 \
-    -a com.hypercharge.service.UPDATE_NOTIFICATION \
-    -n com.hypercharge.service/.CommandReceiver \
-    --es mode "$_MODE" --ei temp "$_TEMP_C" --ei battery "$_BAT" \
-    --ei current "${_CUR_MA:-0}" --es appname "${_APP_NAME:-}" \
-    --ei remaining "${_REMAINING:-0}" --ei timeleft "${_TIME_LEFT:-0}" >/dev/null 2>&1
+  NOTIF_ACTIVE=1
 }
 
 # ------------------------------------------------------------------------------
@@ -291,15 +312,27 @@ while true; do
   fi
 
   # 1. Read battery status & cable connection
-  BATT_STATUS=$(read_node /sys/class/power_supply/battery/status)
-  USB_ONLINE=$(read_node /sys/class/power_supply/usb/online)
-  AC_ONLINE=$(read_node /sys/class/power_supply/ac/online)
-  MAIN_ONLINE=$(read_node /sys/class/power_supply/main/online)
-  USB_PRESENT=$(read_node /sys/class/power_supply/usb/present)
-
   USB_ON=0
-  if [ "$USB_ONLINE" = "1" ] || [ "$AC_ONLINE" = "1" ] || [ "$MAIN_ONLINE" = "1" ] || [ "$USB_PRESENT" = "1" ] || [ "$BATT_STATUS" = "Charging" ] || [ "$BATT_STATUS" = "Full" ]; then
-    USB_ON=1
+  for _N in /sys/class/power_supply/*/online; do
+    [ -f "$_N" ] && [ "$(cat "$_N" 2>/dev/null)" = "1" ] && USB_ON=1 && break
+  done
+  if [ "$USB_ON" = "0" ]; then
+    for _N in /sys/class/power_supply/*/status; do
+      if [ -f "$_N" ] && grep -qiE 'charging|full' "$_N" 2>/dev/null; then
+        USB_ON=1
+        break
+      fi
+    done
+  fi
+  if [ "$USB_ON" = "0" ]; then
+    for _N in /sys/class/power_supply/*/present; do
+      [ -f "$_N" ] && [ "$(cat "$_N" 2>/dev/null)" = "1" ] && USB_ON=1 && break
+    done
+  fi
+  if [ "$USB_ON" = "0" ]; then
+    if dumpsys battery 2>/dev/null | grep -qiE 'powered: true|status: 2|status: 5'; then
+      USB_ON=1
+    fi
   fi
 
   # ----------------------------------------------------------------------------
@@ -462,39 +495,39 @@ while true; do
     _P="$2"
     case "$_P" in
       TURBO)
-        [ "$_T" -ge 380 ] && echo "HIGH" && return
+        [ "$_T" -ge 410 ] && echo "HIGH" && return
         echo "TURBO"
         ;;
       HIGH)
-        [ "$_T" -lt 372 ] && echo "TURBO" && return
-        [ "$_T" -ge 405 ] && echo "BALANCED" && return
+        [ "$_T" -lt 402 ] && echo "TURBO" && return
+        [ "$_T" -ge 430 ] && echo "BALANCED" && return
         echo "HIGH"
         ;;
       BALANCED)
-        [ "$_T" -lt 397 ] && echo "HIGH" && return
-        [ "$_T" -ge 425 ] && echo "WARM" && return
+        [ "$_T" -lt 422 ] && echo "HIGH" && return
+        [ "$_T" -ge 445 ] && echo "WARM" && return
         echo "BALANCED"
         ;;
       WARM)
-        [ "$_T" -lt 417 ] && echo "BALANCED" && return
-        [ "$_T" -ge 445 ] && echo "COOLING" && return
+        [ "$_T" -lt 437 ] && echo "BALANCED" && return
+        [ "$_T" -ge 460 ] && echo "COOLING" && return
         echo "WARM"
         ;;
       COOLING)
-        [ "$_T" -lt 437 ] && echo "WARM" && return
-        [ "$_T" -ge 465 ] && echo "THROTTLE" && return
+        [ "$_T" -lt 452 ] && echo "WARM" && return
+        [ "$_T" -ge 475 ] && echo "THROTTLE" && return
         echo "COOLING"
         ;;
       THROTTLE)
-        [ "$_T" -lt 457 ] && echo "COOLING" && return
+        [ "$_T" -lt 467 ] && echo "COOLING" && return
         echo "THROTTLE"
         ;;
       *)
-        if [ "$_T" -lt 380 ]; then echo "TURBO"
-        elif [ "$_T" -lt 405 ]; then echo "HIGH"
-        elif [ "$_T" -lt 425 ]; then echo "BALANCED"
-        elif [ "$_T" -lt 445 ]; then echo "WARM"
-        elif [ "$_T" -lt 465 ]; then echo "COOLING"
+        if [ "$_T" -lt 410 ]; then echo "TURBO"
+        elif [ "$_T" -lt 430 ]; then echo "HIGH"
+        elif [ "$_T" -lt 445 ]; then echo "BALANCED"
+        elif [ "$_T" -lt 460 ]; then echo "WARM"
+        elif [ "$_T" -lt 475 ]; then echo "COOLING"
         else echo "THROTTLE"
         fi
         ;;
@@ -523,13 +556,16 @@ while true; do
     [ "$TARGET_CUR" -gt "$CAP_85_CURRENT" ] && TARGET_CUR=$CAP_85_CURRENT
   fi
 
-  # Apply parameters if tier changed
+  # Apply parameters: log tier switch + continuous enforcement against mi_thermald
   if [ "$TARGET_TIER" != "$LAST_TIER" ]; then
     echo "$(date '+%H:%M:%S') - Tier switch: $LAST_TIER -> $TARGET_TIER ($((TARGET_CUR/1000))mA @ ${TEMP_C}.${TEMP_DEC}°C)" >> "$LOG_FILE"
     LAST_TIER="$TARGET_TIER"
     enable_mtk_fastcharge
-    apply_current "$TARGET_CUR"
   fi
+  write_node /sys/class/power_supply/battery/thermal_charge_level 0
+  write_node /sys/class/power_supply/battery/thermal_input_current_limit 0
+  write_node /sys/class/power_supply/battery/charge_control_limit 0
+  apply_current "$TARGET_CUR"
 
   # Send notification update (throttled to avoid IPC spam)
   TIME_SINCE_BC=$((NOW - LAST_BROADCAST_TIME))
@@ -552,6 +588,6 @@ while true; do
     LAST_BROADCAST_MODE="NORMAL"
   fi
 
-  # Steady charging polling interval (2.5 seconds)
-  sleep 2.5
+  # Steady fast-charging polling interval (1.2 seconds for real-time mi_thermald suppression)
+  sleep 1.2
 done

@@ -3,10 +3,14 @@
 *.tar.gz
 apk_build/
 scratch_apk/
+app/build/
+app/HyperChargeService.apk
+*.idsig
 
 # Logs
 *.log
 hyper_charge.log
+.github_token
 
 # Temporary & system files
 *.tmp

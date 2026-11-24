@@ -34,17 +34,30 @@ ui_print "━━━━━━━━━━━━━━━━━━━━━━━�
 APK_PATH="$MODPATH/system/app/HyperChargingService/HyperChargeService.apk"
 if [ -f "$APK_PATH" ]; then
   ui_print "  • Installing companion notification APK..."
-  pm install -r -t --dont-kill "$APK_PATH" >/dev/null 2>&1
-  pm install -r --user 0 -t --dont-kill "$APK_PATH" >/dev/null 2>&1
+  # Clean previous conflicting signature installations
+  pm uninstall com.hypercharge.service >/dev/null 2>&1
+  pm uninstall --user 0 com.hypercharge.service >/dev/null 2>&1
+
+  pm install -r -g "$APK_PATH" >/dev/null 2>&1 || pm install -r "$APK_PATH" >/dev/null 2>&1
+  pm install -r -g --user 0 "$APK_PATH" >/dev/null 2>&1 || pm install -r --user 0 "$APK_PATH" >/dev/null 2>&1
   
   pm grant com.hypercharge.service android.permission.POST_NOTIFICATIONS 2>/dev/null
   pm grant com.hypercharge.service android.permission.FOREGROUND_SERVICE 2>/dev/null
   pm grant com.hypercharge.service android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 2>/dev/null
+  appops set com.hypercharge.service POST_NOTIFICATION allow 2>/dev/null
+  appops set com.hypercharge.service SYSTEM_ALERT_WINDOW allow 2>/dev/null
   dumpsys deviceidle whitelist +com.hypercharge.service 2>/dev/null
   ui_print "  ✓ Companion APK configured"
 else
   ui_print "  • Standalone kernel mode (APK omitted)"
 fi
+
+# Set system app permissions (system_file context + 0755/0644)
+set_perm_recursive "$MODPATH/system" 0 0 0755 0644 2>/dev/null
+chmod 0755 "$MODPATH/system/app" 2>/dev/null
+chmod 0755 "$MODPATH/system/app/HyperChargingService" 2>/dev/null
+chmod 0644 "$APK_PATH" 2>/dev/null
+chcon -R u:object_r:system_file:s0 "$MODPATH/system" 2>/dev/null
 
 # Set script permissions (Magisk official + fallback chmod)
 set_perm "$MODPATH/service.sh" 0 0 0755 2>/dev/null || chmod 0755 "$MODPATH/service.sh" 2>/dev/null

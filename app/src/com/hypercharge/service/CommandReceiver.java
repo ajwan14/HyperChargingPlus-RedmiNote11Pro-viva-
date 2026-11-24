@@ -3,6 +3,7 @@ package com.hypercharge.service;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 
 public class CommandReceiver extends BroadcastReceiver {
     @Override
@@ -10,7 +11,7 @@ public class CommandReceiver extends BroadcastReceiver {
         if (context == null || intent == null) return;
         if ("com.hypercharge.service.UPDATE_NOTIFICATION".equals(intent.getAction())) {
             String mode = intent.getStringExtra("mode");
-            if (mode == null) mode = "INACTIVE";
+            if (mode == null || mode.trim().isEmpty()) mode = "NORMAL";
 
             Intent serviceIntent = new Intent(context, ChargeNotificationService.class);
             serviceIntent.putExtra("mode", mode);
@@ -25,7 +26,11 @@ public class CommandReceiver extends BroadcastReceiver {
                 if ("INACTIVE".equalsIgnoreCase(mode) || "STOP".equalsIgnoreCase(mode) || "DISCONNECTED".equalsIgnoreCase(mode)) {
                     context.startService(serviceIntent);
                 } else {
-                    context.startForegroundService(serviceIntent);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(serviceIntent);
+                    } else {
+                        context.startService(serviceIntent);
+                    }
                 }
             } catch (Exception ignored) {}
         }

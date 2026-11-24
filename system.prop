@@ -1,2 +1,5 @@
 # Xiaomi Redmi Note 11 Pro 4G (viva) Charging & Performance Properties
 persist.vendor.charging.enhancement=1
+persist.vendor.quickcharge=1
+persist.vendor.smart.charging=0
+ro.vendor.charging.boost=true
