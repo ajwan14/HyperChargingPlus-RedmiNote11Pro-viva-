@@ -5,7 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Build;
 import android.os.IBinder;
 
@@ -14,11 +17,24 @@ public class ChargeNotificationService extends Service {
     private static final int NOTIFICATION_ID = 1;
     private NotificationManager notificationManager;
 
+    private final BroadcastReceiver powerReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent != null && Intent.ACTION_POWER_DISCONNECTED.equals(intent.getAction())) {
+                stopForegroundService();
+            }
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
         notificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         createNotificationChannel();
+        try {
+            IntentFilter filter = new IntentFilter(Intent.ACTION_POWER_DISCONNECTED);
+            registerReceiver(powerReceiver, filter);
+        } catch (Exception ignored) {}
     }
 
     @Override
@@ -170,6 +186,9 @@ public class ChargeNotificationService extends Service {
 
     @Override
     public void onDestroy() {
+        try {
+            unregisterReceiver(powerReceiver);
+        } catch (Exception ignored) {}
         stopForegroundService();
         super.onDestroy();
     }

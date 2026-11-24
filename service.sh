@@ -311,27 +311,46 @@ while true; do
     fi
   fi
 
-  # 1. Read battery status & cable connection
+  # 1. Accurately detect charger connection (EXCLUDE battery presence nodes!)
   USB_ON=0
-  for _N in /sys/class/power_supply/*/online; do
-    [ -f "$_N" ] && [ "$(cat "$_N" 2>/dev/null)" = "1" ] && USB_ON=1 && break
-  done
-  if [ "$USB_ON" = "0" ]; then
-    for _N in /sys/class/power_supply/*/status; do
-      if [ -f "$_N" ] && grep -qiE 'charging|full' "$_N" 2>/dev/null; then
-        USB_ON=1
-        break
-      fi
-    done
-  fi
-  if [ "$USB_ON" = "0" ]; then
-    for _N in /sys/class/power_supply/*/present; do
-      [ -f "$_N" ] && [ "$(cat "$_N" 2>/dev/null)" = "1" ] && USB_ON=1 && break
-    done
-  fi
-  if [ "$USB_ON" = "0" ]; then
-    if dumpsys battery 2>/dev/null | grep -qiE 'powered: true|status: 2|status: 5'; then
+
+  # Check charger/USB online nodes directly
+  for _N in \
+    /sys/class/power_supply/usb/online \
+    /sys/class/power_supply/ac/online \
+    /sys/class/power_supply/charger/online \
+    /sys/class/power_supply/main/online \
+    /sys/class/power_supply/mtk-master-charger/online \
+    /sys/class/power_supply/usb/present
+  do
+    if [ -f "$_N" ] && [ "$(cat "$_N" 2>/dev/null)" = "1" ]; then
       USB_ON=1
+      break
+    fi
+  done
+
+  # Fallback to kernel battery status (ONLY 'Charging', NEVER 'Full' or 'Discharging')
+  if [ "$USB_ON" = "0" ]; then
+    _BSTAT=$(cat /sys/class/power_supply/battery/status 2>/dev/null)
+    if [ "$_BSTAT" = "Charging" ] || [ "$_BSTAT" = "charging" ]; then
+      USB_ON=1
+    fi
+  fi
+
+  # Fallback to Android power service (only if explicitly powered)
+  if [ "$USB_ON" = "0" ]; then
+    if dumpsys battery 2>/dev/null | grep -qiE 'AC powered: true|USB powered: true|Wireless powered: true'; then
+      USB_ON=1
+    fi
+  fi
+
+  # Sanity check: If current is actively discharging (negative), verify cable
+  CUR_RAW=$(read_node_fb /sys/class/power_supply/battery/current_now /sys/class/power_supply/bms/current_now)
+  if [ -n "$CUR_RAW" ] && [ "${CUR_RAW#-}" != "$CUR_RAW" ]; then
+    _USB_CHECK=$(cat /sys/class/power_supply/usb/online 2>/dev/null)
+    _AC_CHECK=$(cat /sys/class/power_supply/ac/online 2>/dev/null)
+    if [ "$_USB_CHECK" != "1" ] && [ "$_AC_CHECK" != "1" ]; then
+      USB_ON=0
     fi
   fi
 
