@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import base64
+import zipfile
 import urllib.request
 import urllib.error
 
@@ -14,12 +15,26 @@ def get_token():
             return f.read().strip()
     return ""
 
+def get_module_prop():
+    props = {}
+    prop_path = os.path.join(os.path.dirname(__file__), "module.prop")
+    if os.path.exists(prop_path):
+        with open(prop_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.strip().split("=", 1)
+                    props[k] = v
+    return props
+
 TOKEN = get_token()
 OWNER = "ajwan14"
 REPO = "Hyper-Charging-Release"
-TAG = "v2.1-viva"
-ZIP_PATH = r"D:\BACKUPS\Everythings\MAGISKMODULE\HYPER_CHARGING_PLUS_v2.1_viva_67W.zip"
-ASSET_NAME = "HYPER_CHARGING_PLUS_2.1-viva_67W.zip"
+
+PROPS = get_module_prop()
+VERSION = PROPS.get("version", "2.1.1-viva")
+VERSION_CODE = int(PROPS.get("versionCode", 22))
+TAG = f"v{VERSION}"
+ASSET_NAME = f"HYPER_CHARGING_PLUS_{VERSION}_67W.zip"
 
 HEADERS = {
     "Authorization": f"token {TOKEN}",
@@ -74,28 +89,80 @@ def sync_file_to_repo(file_path, repo_path, commit_message):
     else:
         print(f"[+] Successfully synced {repo_path} to {OWNER}/{REPO}")
 
+def build_zip(out_zip):
+    print(f"[*] Packaging flashable zip: {out_zip}...")
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    items = [
+        'META-INF', 'system', 'customize.sh', 'service.sh',
+        'module.prop', 'system.prop', 'uninstall.sh', 'game_list.sh',
+        'banner.png', 'changelog.md', 'README.md', 'LICENSE'
+    ]
+    with zipfile.ZipFile(out_zip, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        for item in items:
+            full_path = os.path.join(root_dir, item)
+            if os.path.isdir(full_path):
+                for dirpath, dirnames, filenames in os.walk(full_path):
+                    for fn in filenames:
+                        fp = os.path.join(dirpath, fn)
+                        arcname = os.path.relpath(fp, root_dir).replace('\\', '/')
+                        zinfo = zipfile.ZipInfo.from_file(fp, arcname)
+                        if arcname.endswith('.sh') or 'update-binary' in arcname:
+                            zinfo.external_attr = 0o100755 << 16
+                        else:
+                            zinfo.external_attr = 0o100644 << 16
+                        with open(fp, 'rb') as f:
+                            zf.writestr(zinfo, f.read())
+            elif os.path.isfile(full_path):
+                zinfo = zipfile.ZipInfo.from_file(full_path, item)
+                if item.endswith('.sh'):
+                    zinfo.external_attr = 0o100755 << 16
+                else:
+                    zinfo.external_attr = 0o100644 << 16
+                with open(full_path, 'rb') as f:
+                    zf.writestr(zinfo, f.read())
+    print(f"[+] Zip built successfully ({os.path.getsize(out_zip):,} bytes)")
+
 def main():
-    print(f"[*] Publishing release to {OWNER}/{REPO}...")
+    print(f"[*] Preparing release {TAG} (versionCode: {VERSION_CODE}) for {OWNER}/{REPO}...")
 
-    # 1. Sync update.json
-    sync_file_to_repo("update.json", "update.json", "update: sync Magisk update.json [skip ci]")
+    # 1. Generate update.json
+    update_data = {
+        "version": VERSION,
+        "versionCode": VERSION_CODE,
+        "zipUrl": f"https://github.com/{OWNER}/{REPO}/releases/download/{TAG}/{ASSET_NAME}",
+        "changelog": f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/changelog.md"
+    }
+    with open("update.json", "w", encoding="utf-8") as f:
+        json.dump(update_data, f, indent=2)
+    print(f"[+] Generated update.json: version {VERSION}, code {VERSION_CODE}")
 
-    # 2. Sync changelog.md
+    # 2. Build ZIP file
+    out_zip = os.path.join(r"D:\BACKUPS\Everythings\MAGISKMODULE", ASSET_NAME)
+    build_zip(out_zip)
+
+    # 3. Also keep a copy for backward compatibility
+    legacy_zip = os.path.join(r"D:\BACKUPS\Everythings\MAGISKMODULE", "HYPER_CHARGING_PLUS_v2.1_viva_67W.zip")
+    with open(out_zip, "rb") as src, open(legacy_zip, "wb") as dst:
+        dst.write(src.read())
+
+    # 4. Sync update.json
+    sync_file_to_repo("update.json", "update.json", f"update: release {VERSION} (code {VERSION_CODE}) [skip ci]")
+
+    # 5. Sync changelog.md
     if os.path.exists("changelog.md"):
-        sync_file_to_repo("changelog.md", "changelog.md", "docs: sync changelog.md [skip ci]")
+        sync_file_to_repo("changelog.md", "changelog.md", f"docs: update changelog for {VERSION} [skip ci]")
 
-    # 3. Read changelog for release body
-    release_body = "Hyper Charging+ v2.1-viva for Xiaomi Redmi Note 11 Pro 4G\n\nFeatures:\n- Specialized 67W Turbo Charge\n- Companion Notification Service\n- Anti-flapping thermal ladder\n- Game bypass support"
-    if os.path.exists("changelog.md"):
-        with open("changelog.md", "r", encoding="utf-8") as f:
-            release_body = f.read()[:2000]
-
-    # 4. Check existing release
+    # 6. Check existing release
     rel_url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/tags/{TAG}"
     existing_rel = api_request(rel_url)
     
     release_id = None
     upload_url_template = None
+
+    release_body = f"Hyper Charging+ {VERSION} for Xiaomi Redmi Note 11 Pro 4G viva\n\n- Fix notification persistence on charger disconnect\n- Higher thermal ceiling 6.5A 67W Turbo\n- Instant ACTION_POWER_DISCONNECTED listener"
+    if os.path.exists("changelog.md"):
+        with open("changelog.md", "r", encoding="utf-8") as f:
+            release_body = f.read()[:2000]
 
     if isinstance(existing_rel, dict) and "id" in existing_rel:
         release_id = existing_rel["id"]
@@ -108,7 +175,7 @@ def main():
             if asset.get("name") == ASSET_NAME:
                 asset_id = asset["id"]
                 del_url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/assets/{asset_id}"
-                del_res = api_request(del_url, method="DELETE")
+                api_request(del_url, method="DELETE")
                 print(f"[+] Deleted old asset {ASSET_NAME} (ID: {asset_id})")
     else:
         # Create new release
@@ -116,7 +183,7 @@ def main():
         create_url = f"https://api.github.com/repos/{OWNER}/{REPO}/releases"
         new_rel = api_request(create_url, method="POST", data={
             "tag_name": TAG,
-            "name": f"Hyper Charging+ 2.1-viva [Redmi Note 11 Pro 4G viva]",
+            "name": f"Hyper Charging+ {VERSION} [Redmi Note 11 Pro 4G viva]",
             "body": release_body,
             "draft": False,
             "prerelease": False
@@ -128,15 +195,11 @@ def main():
         upload_url_template = new_rel["upload_url"]
         print(f"[+] Created release {TAG} (ID: {release_id})")
 
-    # 5. Upload ZIP Asset
-    if not os.path.exists(ZIP_PATH):
-        print(f"[-] Zip file not found at: {ZIP_PATH}")
-        sys.exit(1)
-
+    # 7. Upload ZIP Asset
     clean_upload_url = upload_url_template.split("{")[0] + f"?name={ASSET_NAME}"
-    print(f"[*] Uploading {ASSET_NAME} ({os.path.getsize(ZIP_PATH):,} bytes)...")
+    print(f"[*] Uploading {ASSET_NAME} ({os.path.getsize(out_zip):,} bytes)...")
 
-    with open(ZIP_PATH, "rb") as f:
+    with open(out_zip, "rb") as f:
         zip_bytes = f.read()
 
     upload_res = api_request(clean_upload_url, method="POST", data=zip_bytes, content_type="application/zip")
@@ -145,8 +208,8 @@ def main():
     else:
         download_url = upload_res.get("browser_download_url")
         print(f"[+] SUCCESS! Asset uploaded: {download_url}")
-        print(f"[+] Auto-update JSON is live at: https://raw.githubusercontent.com/{OWNER}/{REPO}/main/update.json")
-        print("\nAll tasks finished. Magisk in-app auto-update is active!")
+        print(f"[+] Auto-update JSON is live: https://raw.githubusercontent.com/{OWNER}/{REPO}/main/update.json")
+        print(f"\nVersion bump to {VERSION} (code {VERSION_CODE}) complete!")
 
 if __name__ == "__main__":
     main()

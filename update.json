@@ -1,6 +1,6 @@
 {
-  "version": "2.1-viva",
-  "versionCode": 21,
-  "zipUrl": "https://github.com/ajwan14/Hyper-Charging-Release/releases/download/v2.1-viva/HYPER_CHARGING_PLUS_2.1-viva_67W.zip",
+  "version": "2.1.1-viva",
+  "versionCode": 22,
+  "zipUrl": "https://github.com/ajwan14/Hyper-Charging-Release/releases/download/v2.1.1-viva/HYPER_CHARGING_PLUS_2.1.1-viva_67W.zip",
   "changelog": "https://raw.githubusercontent.com/ajwan14/Hyper-Charging-Release/main/changelog.md"
 }
